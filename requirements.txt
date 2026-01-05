@@ -6,3 +6,4 @@ beautifulsoup4
 graphviz
 pydantic
 python-dotenv
+googlesearch-python

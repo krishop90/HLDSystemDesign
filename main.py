@@ -1,5 +1,6 @@
 import warnings
-warnings.simplefilter("ignore", FutureWarning) # 🔇 Silence the Google warning
+# Silence specific warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="duckduckgo_search")
 
 print("⏳ Importing libraries...")
 from fastapi import FastAPI, HTTPException
@@ -10,6 +11,18 @@ import os
 import google.generativeai as genai
 import graphviz
 import json
+import requests
+from bs4 import BeautifulSoup
+import time
+import random
+import re
+
+# Try importing the robust search library
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    print("❌ duckduckgo_search not installed. Run: pip install duckduckgo-search requests beautifulsoup4")
+    DDGS = None
 
 print("✅ Libraries imported successfully.")
 
@@ -24,10 +37,6 @@ else:
     genai.configure(api_key=api_key)
 
 app = FastAPI()
-print("🚀 Starting FastAPI app...")
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,13 +49,101 @@ app.add_middleware(
 class TopicRequest(BaseModel):
     topic: str
 
-# --- REPLACE THIS FUNCTION IN main.py ---
+# --- 🔍 ROBUST SCRAPING ENGINE ---
+def get_search_results(query):
+    """
+    Tries 2 methods to get search results.
+    """
+    urls = []
+    
+    # METHOD 1: Library
+    if DDGS:
+        try:
+            print("Trying Search Method 1 (Library)...")
+            results = DDGS().text(query, max_results=5)
+            if results:
+                for r in results:
+                    urls.append(r['href'])
+                print(f"✅ Found {len(urls)} URLs via Library.")
+                return urls
+        except Exception as e:
+            print(f"⚠️ Method 1 failed: {e}")
 
-# --- REPLACE THIS ENTIRE FUNCTION IN main.py ---
+    # METHOD 2: Direct HTML Fallback
+    print("Trying Search Method 2 (Direct HTML)...")
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        resp = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={'q': query},
+            headers=headers,
+            timeout=10
+        )
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            for link in soup.find_all('a', class_='result__a'):
+                href = link.get('href')
+                if href and 'http' in href:
+                    urls.append(href)
+                if len(urls) >= 5: break
+            
+            if urls:
+                print(f"✅ Found {len(urls)} URLs via Direct HTML.")
+                return urls
+    except Exception as e:
+        print(f"⚠️ Method 2 failed: {e}")
 
+    return urls
+
+def scrape_system_design_data(topic):
+    print(f"🕵️ Searching web for: {topic} system design...")
+    
+    # 🎯 GENERIC QUERY to get better results
+    # We remove "High Level Design" from search sometimes to get broader results
+    query = f"{topic} system design architecture"
+    
+    urls = get_search_results(query)
+
+    if not urls:
+        print("❌ CRITICAL: No URLs found via any method.")
+        return None
+
+    best_content = ""
+    
+    for url in urls:
+        try:
+            print(f"📄 Scraping: {url}")
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                content_div = soup.find('article') or soup.find('div', class_='article-content') or soup.find('main')
+                target = content_div if content_div else soup
+                
+                paragraphs = target.find_all(['p', 'li', 'h1', 'h2', 'h3'])
+                text_content = "\n".join([t.get_text().strip() for t in paragraphs if len(t.get_text()) > 30])
+                
+                # ⚡️ RELAXED CHECK: Just checking if we got ANY text (> 200 chars)
+                if len(text_content) > 200:
+                    best_content = text_content[:15000] # Increased limit for AI
+                    print(f"🏆 Found content ({len(best_content)} chars). Using this!")
+                    return best_content 
+                else:
+                    print("⏩ Skipping: Content too short.")
+                    
+        except Exception as e:
+            print(f"⚠️ Failed to scrape {url}: {e}")
+            continue
+            
+    return None 
+
+# --- GRAPHVIZ PARSER ---
 def parse_graphviz_to_reactflow(dot_code):
     try:
-        # Ask Graphviz for the full JSON data
         src = graphviz.Source(dot_code)
         src.engine = 'dot'
         json_str = src.pipe(format='json').decode('utf-8')
@@ -55,24 +152,13 @@ def parse_graphviz_to_reactflow(dot_code):
         nodes = []
         edges = []
         
-        # 🧠 SHAPE MAPPING RULES
-        # Graphviz Shape -> React Flow Type
         SHAPE_MAP = {
-            "diamond": "diamond",
-            "Mdiamond": "diamond",
-            "triangle": "triangle",
-            "box": "default", # Square/Rectangle
-            "rect": "default",
-            "rectangle": "default",
-            "circle": "circle",
-            "doublecircle": "circle",
-            "oval": "circle",
-            "ellipse": "circle",
-            "cylinder": "database",
-            "note": "default"
+            "diamond": "diamond", "Mdiamond": "diamond", "triangle": "triangle",
+            "box": "default", "rect": "default", "rectangle": "default",
+            "circle": "circle", "doublecircle": "circle", "oval": "circle",
+            "ellipse": "circle", "cylinder": "database", "note": "default"
         }
 
-        # 🖼️ ICON MAPPING (Keep your existing list)
         ICON_MAP = {
             "mysql": "mysql", "cassandra": "cassandra", "postgres": "postgres",
             "mongo": "mongo", "redis": "redis", "kafka": "kafka",
@@ -81,105 +167,64 @@ def parse_graphviz_to_reactflow(dot_code):
             "aws": "aws", "ec2": "server", "lb": "load-balancer"
         }
 
-        # --- HELPER: Process a list of objects (Recursive for Clusters) ---
         def process_objects(obj_list, parent_id=None):
             for obj in obj_list:
-                # 1. Handle Subgraphs (Clusters/Wrappers)
                 if obj.get('name', '').startswith('cluster') or obj.get('name', '').startswith('subgraph'):
-                    # Create a Group Node
-                    bb = obj.get('bb', '0,0,0,0').split(',') # Bounding Box
-                    width = float(bb[2]) - float(bb[0])
-                    height = float(bb[3]) - float(bb[1])
-                    # Graphviz BB is bottom-left based. We need center for React Flow logic usually, 
-                    # but for groups, we often just need the container.
-                    # Simplified: We treat clusters as transparent containers for now.
-                    # Recursively process children
-                    if 'subgraph' in obj: # Old graphviz versions
-                        process_objects(obj['subgraph'], parent_id)
-                    elif 'objects' in obj: # New graphviz versions
-                        process_objects(obj['objects'], obj['name'])
+                    if 'objects' in obj: process_objects(obj['objects'], obj['name'])
                     continue
 
-                if not obj.get('name') or obj.get('name').startswith('%'):
-                    continue
+                if not obj.get('name') or obj.get('name').startswith('%'): continue
 
-                # 2. Position
                 pos = obj.get('pos', '0,0').split(',')
                 x = float(pos[0]) * 1.5
                 y = -float(pos[1]) * 1.5
                 
-                # 3. Label Logic (Fix empty names)
                 raw_label = obj.get('label', obj['name'])
-                if raw_label == '\\N' or not raw_label.strip():
-                    raw_label = obj['name']
+                if raw_label == '\\N' or not raw_label.strip(): raw_label = obj['name']
                 
                 label = raw_label.replace('\\n', '\n')
                 label_lower = label.lower()
 
-                # 4. Determine Type
-                node_type = "default" # Default is rectangle/square
+                node_type = "default"
                 icon_name = None
 
-                # Check Icons
                 for keyword, icon_file in ICON_MAP.items():
                     if keyword in label_lower:
                         node_type = "imageNode"
                         icon_name = icon_file
                         break
                 
-                # Check Shapes if no icon
                 if node_type == "default":
                     gv_shape = obj.get('shape', 'box')
-                    if gv_shape in SHAPE_MAP:
-                        node_type = SHAPE_MAP[gv_shape]
-                    
-                    # Override for specifics
-                    if 'service' in label_lower and node_type == 'circle':
-                        node_type = 'diamond' # You asked for Service = Diamond
+                    if gv_shape in SHAPE_MAP: node_type = SHAPE_MAP[gv_shape]
+                    if 'service' in label_lower and node_type == 'circle': node_type = 'diamond'
 
                 nodes.append({
                     "id": obj['name'],
                     "type": node_type,
                     "position": {"x": x, "y": y},
                     "data": { "label": label, "icon": icon_name },
-                    "parentNode": parent_id # Connects to cluster if exists
+                    "parentNode": parent_id
                 })
 
-        # Start processing
         process_objects(layout_data.get('objects', []))
 
-        # --- PROCESS EDGES ---
-        # ... (Keep the rest of your function logic same) ...
-
-        # --- PROCESS EDGES ---
         for edge in layout_data.get('edges', []):
             source_id = layout_data['objects'][edge['tail']]['name']
             target_id = layout_data['objects'][edge['head']]['name']
-            
-            # 1. Capture Line Style
             style = edge.get('style', 'solid')
             is_dashed = style == 'dashed' or style == 'dotted'
-
-            # 2. Capture Label (Text on Arrow)
-            # Graphviz might put it in 'label' or 'xlabel'
             edge_label = edge.get('label', '') or edge.get('xlabel', '')
-            
-            # Clean up label
-            if edge_label:
-                edge_label = edge_label.replace('\\n', '\n')
+            if edge_label: edge_label = edge_label.replace('\\n', '\n')
 
             edges.append({
                 "id": f"e_{source_id}_{target_id}",
                 "source": source_id,
                 "target": target_id,
                 "animated": True, 
-                "label": edge_label, # 👈 THIS sends the text to React
+                "label": edge_label,
                 "type": "smoothstep",
-                "style": {
-                    "stroke": "#555", 
-                    "strokeWidth": 2,
-                    "strokeDasharray": "5,5" if is_dashed else "0"
-                },
+                "style": { "stroke": "#555", "strokeWidth": 2, "strokeDasharray": "5,5" if is_dashed else "0" },
                 "data": { "isDashed": is_dashed }
             })
             
@@ -189,23 +234,39 @@ def parse_graphviz_to_reactflow(dot_code):
         print(f"Graphviz Error: {e}")
         return None
 
-
-
-@app.post("/generate")
-# --- UPDATE THIS FUNCTION IN main.py ---
-
+# --- MAIN GENERATION ENDPOINT ---
 @app.post("/generate")
 async def generate_diagram(request: TopicRequest):
     topic = request.topic
-    print(f"🚀 Generating Architecture for: {topic}")
+    print(f"🚀 Processing request for: {topic}")
 
-    # 1. PROMPT
-    prompt = f"""
-    You are a System Design Architect. Create a High-Level Design (HLD) for "{topic}".
+    # 1. SCRAPING (Relaxed)
+    context_data = scrape_system_design_data(topic)
     
+    if not context_data:
+        print("❌ Scraping failed to find GOOD data, but we will ask Gemini to fallback to its own knowledge.")
+        context_data = f"The user wants a system design for {topic}. Please generate it based on your own knowledge."
+
+    print("📝 Generating diagram with available context...")
+    
+    # 2. CONSTRUCT PROMPT
+    prompt = f"""
+    You are a Software Architect.
+    
+    Request: Create a High-Level System Design for "{topic}".
+    
+    Context from Web (Use if helpful, otherwise rely on general knowledge):
+    {context_data[:5000]} 
+    
+    INSTRUCTIONS:
+    Create a Graphviz DOT diagram.
+    """
+
+    # Constraints
+    prompt += """
     CRITICAL OUTPUT RULES:
     1. Return ONLY valid Graphviz DOT code. No markdown, no explanations.
-    2. Start exactly with 'strict digraph G {{'.
+    2. Start exactly with 'strict digraph G {'.
     3. Use '->' for connections (NOT '--').
     4. Use these specific shapes:
        - Database/Storage -> shape=cylinder
@@ -217,33 +278,21 @@ async def generate_diagram(request: TopicRequest):
     """
 
     try:
-        # Switch back to 'gemini-pro' or 'gemini-1.5-flash' depending on what works for you
+        # 3. CALL AI
         model = genai.GenerativeModel('gemini-2.5-flash-lite') 
         response = model.generate_content(prompt)
         
-        # 🧹 CLEANUP & SANITIZATION
+        # 4. CLEANUP
         raw_dot = response.text.replace("```dot", "").replace("```", "").strip()
         
-        # 🚑 AUTO-FIXER 2.0 (The Bulletproof Update)
-        
-        # 1. Remove the hallucinated "digraphviz" keyword
-        if "digraphviz" in raw_dot:
-            raw_dot = raw_dot.replace("digraphviz", "")
-
-        # 2. Fix lines connecting with '--' instead of '->'
-        if "--" in raw_dot:
-            raw_dot = raw_dot.replace("--", "->")
-
-        # 3. Ensure it starts correctly
-        # Sometimes AI adds text before the graph, so we find the first '{' 
-        # and wrap it properly if the header is messed up.
+        if "digraphviz" in raw_dot: raw_dot = raw_dot.replace("digraphviz", "")
+        if "--" in raw_dot: raw_dot = raw_dot.replace("--", "->")
         first_brace_index = raw_dot.find("{")
         if first_brace_index != -1:
-            # We explicitly force the header to be correct
             body = raw_dot[first_brace_index:]
             raw_dot = f"strict digraph G {body}"
         
-        # Now parse it
+        # 5. PARSE
         frontend_data = parse_graphviz_to_reactflow(raw_dot)
         
         if not frontend_data:
@@ -253,8 +302,6 @@ async def generate_diagram(request: TopicRequest):
 
     except Exception as e:
         print(f"❌ Server Error: {e}")
-        if 'raw_dot' in locals():
-            print(f"--- BAD DOT CODE ---\n{raw_dot}\n--------------------")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
