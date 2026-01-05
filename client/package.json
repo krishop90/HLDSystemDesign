@@ -10,11 +10,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/hands": "^0.4.1675469240",
+    "@types/gif.js": "^0.2.5",
     "axios": "^1.13.2",
+    "downloadjs": "^1.4.7",
+    "gif.js": "^0.2.0",
+    "html-to-image": "^1.11.13",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "reactflow": "^11.11.4"
+    "react-webcam": "^7.2.0",
+    "reactflow": "^11.11.4",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

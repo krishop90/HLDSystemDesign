@@ -1,3 +1,7 @@
+import warnings
+warnings.simplefilter("ignore", FutureWarning) # 🔇 Silence the Google warning
+
+print("⏳ Importing libraries...")
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,7 +11,20 @@ import google.generativeai as genai
 import graphviz
 import json
 
+print("✅ Libraries imported successfully.")
+
+# 1. Load Keys
 load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    print("❌ ERROR: GEMINI_API_KEY not found in .env file!")
+else:
+    print("🔑 API Key found.")
+    genai.configure(api_key=api_key)
+
+app = FastAPI()
+print("🚀 Starting FastAPI app...")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
@@ -175,17 +192,20 @@ def parse_graphviz_to_reactflow(dot_code):
 
 
 @app.post("/generate")
+# --- UPDATE THIS FUNCTION IN main.py ---
+
+@app.post("/generate")
 async def generate_diagram(request: TopicRequest):
     topic = request.topic
     print(f"🚀 Generating Architecture for: {topic}")
 
-    # 1. IMPROVED PROMPT (Forces correct syntax)
+    # 1. PROMPT
     prompt = f"""
     You are a System Design Architect. Create a High-Level Design (HLD) for "{topic}".
     
     CRITICAL OUTPUT RULES:
     1. Return ONLY valid Graphviz DOT code. No markdown, no explanations.
-    2. Start with 'strict digraph G {{'.
+    2. Start exactly with 'strict digraph G {{'.
     3. Use '->' for connections (NOT '--').
     4. Use these specific shapes:
        - Database/Storage -> shape=cylinder
@@ -197,26 +217,33 @@ async def generate_diagram(request: TopicRequest):
     """
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Switch back to 'gemini-pro' or 'gemini-1.5-flash' depending on what works for you
+        model = genai.GenerativeModel('gemini-2.5-flash-lite') 
         response = model.generate_content(prompt)
         
         # 🧹 CLEANUP & SANITIZATION
         raw_dot = response.text.replace("```dot", "").replace("```", "").strip()
         
-        # 🚑 AUTO-FIXER: Convert broken syntax to valid syntax
-        # 1. Fix graph type
-        if raw_dot.startswith("graph"):
-            raw_dot = raw_dot.replace("graph", "digraph", 1)
-            
-        # 2. Fix edges (The error you saw: '--' becomes '->')
+        # 🚑 AUTO-FIXER 2.0 (The Bulletproof Update)
+        
+        # 1. Remove the hallucinated "digraphviz" keyword
+        if "digraphviz" in raw_dot:
+            raw_dot = raw_dot.replace("digraphviz", "")
+
+        # 2. Fix lines connecting with '--' instead of '->'
         if "--" in raw_dot:
             raw_dot = raw_dot.replace("--", "->")
-            
-        # 3. Ensure Strict Digraph (prevents duplicate edges)
-        if "strict digraph" not in raw_dot and "digraph" in raw_dot:
-            raw_dot = raw_dot.replace("digraph", "strict digraph")
 
-        # Now send the clean code to the parser
+        # 3. Ensure it starts correctly
+        # Sometimes AI adds text before the graph, so we find the first '{' 
+        # and wrap it properly if the header is messed up.
+        first_brace_index = raw_dot.find("{")
+        if first_brace_index != -1:
+            # We explicitly force the header to be correct
+            body = raw_dot[first_brace_index:]
+            raw_dot = f"strict digraph G {body}"
+        
+        # Now parse it
         frontend_data = parse_graphviz_to_reactflow(raw_dot)
         
         if not frontend_data:
@@ -226,7 +253,11 @@ async def generate_diagram(request: TopicRequest):
 
     except Exception as e:
         print(f"❌ Server Error: {e}")
-        # Print the bad code to terminal so we can debug if it happens again
         if 'raw_dot' in locals():
             print(f"--- BAD DOT CODE ---\n{raw_dot}\n--------------------")
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🦄 Server is starting on http://localhost:8000")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

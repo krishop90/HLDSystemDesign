@@ -148,3 +148,26 @@ export const TextNode = ({ data, selected }: any) => {
     </>
   );
 };
+
+// ✏️ Freehand Drawing Node
+export const AnnotationNode = ({ data, selected }: any) => {
+  return (
+    <div style={{ position: 'relative', width: data.width, height: data.height, pointerEvents: 'none' }}>
+      <svg
+        width={data.width}
+        height={data.height}
+        style={{ overflow: 'visible', pointerEvents: 'all' }}
+      >
+        <path
+          d={data.path}
+          stroke={data.color || "#ef4444"} // Default Red Pen
+          strokeWidth={3}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ cursor: 'pointer', filter: selected ? 'drop-shadow(0 0 2px #2563eb)' : 'none' }}
+        />
+      </svg>
+    </div>
+  );
+};
